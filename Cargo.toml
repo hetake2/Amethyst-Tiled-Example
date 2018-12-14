@@ -1,0 +1,8 @@
+[package]
+name = "AmethystGame"
+version = "0.1.0"
+authors = []
+
+[dependencies]
+amethyst = "0.10.0"
+tiled = "0.8.0"
