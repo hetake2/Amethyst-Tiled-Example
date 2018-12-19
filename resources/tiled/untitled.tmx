@@ -3,9 +3,6 @@
  <tileset firstgid="1" name="tilesheet" tilewidth="32" tileheight="32" tilecount="84" columns="14">
   <image source="tilesheet.png" width="448" height="192"/>
  </tileset>
- <tileset firstgid="85" name="tilesheet" tilewidth="32" tileheight="32" tilecount="84" columns="14">
-  <image source="tilesheet.png" width="448" height="192"/>
- </tileset>
  <layer name="Tile Layer 1" width="20" height="15">
   <data encoding="base64" compression="zlib">
    eJzjZmBg4AFidgoxN9QcSSCWAmJRCjHMHBEqmAXDYgNgng4Q6w5i94HijRcad5SY5wmlpYHYHoj5qOQ+UDqQYSAuTQ1E+A0382D5mFKz0MsDZQoxzBwA8cIY9g==

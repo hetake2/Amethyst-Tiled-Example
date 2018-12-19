@@ -3,43 +3,102 @@
 extern crate amethyst;
 extern crate tiled;
 
-use tiled::parse;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+mod tiled_map;
+use tiled_map::load_tmx_map;
+
 use amethyst::prelude::*;
-//use amethyst::input::{is_close_requested, is_key_down};
-use amethyst::core::transform::{Transform, GlobalTransform, TransformBundle};
+use amethyst::input::{InputBundle, InputHandler};
+use amethyst::ecs::{Component, Entity, Join, NullStorage, Read, ReadStorage, System, WriteStorage};
+use amethyst::core::transform::{Parent, Transform, GlobalTransform, TransformBundle};
 use amethyst::core::nalgebra::{MatrixArray, Matrix4, Vector3};
 use amethyst::assets::{AssetStorage, Loader};
 use amethyst::renderer::{
-    Camera, DisplayConfig, DrawFlat2D, Event, Projection, Pipeline, PngFormat, 
-    Texture, TextureCoordinates, TextureHandle, TextureMetadata, RenderBundle, 
-    Sprite, SpriteRender, ScreenDimensions, SpriteSheet, Stage, VirtualKeyCode
+    Camera, ColorMask, DepthMode, DisplayConfig, DrawFlat2D, Event, Projection, Pipeline, PngFormat, 
+    Texture, Transparent, TextureHandle, TextureMetadata, RenderBundle, 
+    Sprite, SpriteRender, ScreenDimensions, SpriteSheet, SpriteSheetFormat, 
+    SpriteSheetHandle, Stage, VirtualKeyCode, ALPHA
 };
 
 pub const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
-// Loading texture function.
-pub fn load_texture<N>(name: N, world: &World) -> TextureHandle
-where 
-    N: Into<String>,
-{
-    let res_loader = world.read_resource::<Loader>();
-    let texture_storage = world.read_resource::<AssetStorage<Texture>>();
-    res_loader.load(
-        name,
-        PngFormat,
-        TextureMetadata::srgb_scale(),
+// Player and...
+#[derive(Default)]
+struct Player;
+
+impl Component for Player {
+    type Storage = NullStorage<Self>;
+}
+
+// ...his movement.
+struct MovementSystem;
+
+impl<'s> System<'s> for MovementSystem {
+    type SystemData = (
+        ReadStorage<'s, Player>,
+        WriteStorage<'s, Transform>,
+        Read<'s, InputHandler<String, String>>
+    );
+
+    fn run(&mut self, (players, mut transforms, input): Self::SystemData) {
+        let x_move = input.axis_value("entity_x").unwrap();
+        let y_move = input.axis_value("entity_y").unwrap();
+
+        for (_, transform) in (&players, &mut transforms).join() {
+            transform.translate_x(x_move as f32 * 5.0);
+            transform.translate_y(y_move as f32 * 5.0);
+        }
+    }
+}
+
+fn load_sprite_sheet(world: &World, png_path: &str, ron_path: &str) -> SpriteSheetHandle {
+    let texture_handle = {
+        let loader = world.read_resource::<Loader>();
+        let texture_storage = world.read_resource::<AssetStorage<Texture>>();
+        loader.load(
+            png_path,
+            PngFormat,
+            TextureMetadata::srgb_scale(),
+            (),
+            &texture_storage,
+        )
+    };
+    let loader = world.read_resource::<Loader>();
+    let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
+    loader.load(
+        ron_path,
+        SpriteSheetFormat,
+        texture_handle,
         (),
-        &texture_storage,
+        &sprite_sheet_store,
     )
 }
 
-// Camera.
-pub fn initialize_camera(world: &mut World) {
+// Creating player.
+fn init_player(world: &mut World, sprite_sheet: &SpriteSheetHandle) -> Entity {
     let mut transform = Transform::default();
-    transform.set_z(1.0);
+    // let (width, height) = {
+    //     let dim = world.read_resource::<ScreenDimensions>();
+    //     (dim.width(), dim.height())
+    // };
+    transform.set_x(0.0);
+    transform.set_y(0.0);
+    let sprite = SpriteRender {
+        sprite_sheet: sprite_sheet.clone(),
+        sprite_number: 1,
+    };
+    world
+        .create_entity()
+        .with(transform)
+        .with(Player)
+        .with(sprite)
+        .with(Transparent)
+        .build()
+}
+
+// Camera.
+pub fn initialize_camera(world: &mut World, parent: Entity) {
+    let mut transform = Transform::default();
+    transform.set_xyz(-16.0, -16.0, 2.0);
     let (width, height) = {
         let dim = world.read_resource::<ScreenDimensions>();
         (dim.width(), dim.height())
@@ -49,8 +108,8 @@ pub fn initialize_camera(world: &mut World) {
         .with(Camera::from(Projection::orthographic(
             0.0, width, 0.0, height
         )))
+        .with(Parent { entity: parent })
         .with(transform)
-        //.with(GlobalTransform(Matrix4::new_translation(&Vector3::new(0.0, 0.0, 1.0))))
         .build();
 }
 
@@ -60,132 +119,28 @@ pub struct TiledGame;
 
 impl SimpleState for TiledGame { 
     fn on_start(&mut self, data: StateData<GameData>) {
-
+        
         let world = data.world;
-        let texture_handle = load_texture("resources/tiled/tilesheet.png", &world);
 
-        // We need the camera to actually see anything.
-        initialize_camera(world);
+        // Loading map.
+        load_tmx_map(world, 
+        "resources/tiled/tilesheet.png",
+        "resources/tiled/untitled.tmx",
+        );
+        // Loading character.
+        let circle_sprite_sheet_handle = load_sprite_sheet(world, 
+        "resources/sprites/example_sprite.png", 
+        "resources/sprites/example_sprite.ron"
+        );
 
-        // Get the game window screen height.
-        let screen_height = {
-            let dim = world.read_resource::<ScreenDimensions>();
-            dim.height()
-        };
+        // Loading camera.
+        let parent = init_player(world, &circle_sprite_sheet_handle);
+        initialize_camera(world, parent);
 
-        // Load tiled map.
-        let tmx_map_file = File::open(&Path::new("resources/tiled/untitled.tmx")).unwrap();
-        let reader = BufReader::new(tmx_map_file);
-        let tmx_map = parse(reader).unwrap();
 
-        if let Some(map_tileset) = tmx_map.get_tileset_by_gid(1) {
-            let tile_width = map_tileset.tile_width as i32;
-            let tile_height = map_tileset.tile_height as i32;
-            let tileset_width = &map_tileset.images[0].width;
-            let tileset_height = &map_tileset.images[0].height;
+        
 
-            let tileset_sprite_columns = tileset_width / tile_width as i32;
-            let tileset_sprite_offset_colums = 1.0 / tileset_sprite_columns as f32;
-
-            let tileset_sprite_rows = tileset_height / tile_height as i32;
-            let tileset_sprite_offset_rows = 1.0 / tileset_sprite_rows as f32;
-            
-            // A place to store the tile sprites in
-            let mut tile_sprites: Vec<Sprite> = Vec::new();
-
-            // The x-axis needs to be reversed for TextureCoordinates
-            for x in (0..tileset_sprite_rows).rev() {
-                for y in 0..tileset_sprite_columns {
-                    
-                    // Coordinates of the 32x32 tile sprite inside the whole
-                    // tileset image, `terrainTiles_default.png` in this case
-                    // Important: TextureCoordinates Y axis goes from BOTTOM (0.0) to TOP (1.0)
-                    let tex_coords = TextureCoordinates {
-                        left: y as f32 * tileset_sprite_offset_colums,
-                        right: (y + 1) as f32 * tileset_sprite_offset_colums,
-                        bottom: x as f32 * tileset_sprite_offset_rows,
-                        top: (x + 1) as f32 * tileset_sprite_offset_rows
-                    };
-
-                    let sprite = Sprite {
-                        width: tile_width as f32,
-                        height: tile_height as f32,
-                        offsets: [0.0, 32.0],
-                        tex_coords
-                    };
-
-                    tile_sprites.push(sprite);
-                }
-            }
-
-            // A sheet of sprites.. so all the tile sprites
-            let sprite_sheet = SpriteSheet {
-                texture: texture_handle,
-                sprites: tile_sprites,
-            };
-
-            // Insert the sprite sheet, which consists of all the tile sprites,
-            // into world resources for later use
-            let sprite_sheet_handle = {
-                let loader = world.read_resource::<Loader>();
-                let sprite_sheet_storage = world.read_resource::<AssetStorage<SpriteSheet>>();
-
-                loader.load_from_data(sprite_sheet, (), &sprite_sheet_storage)
-            };
-
-            // Now that all the tile sprites/textures are loaded in
-            // we can start drawing the tiles for our viewing pleasure
-            let layer: &tiled::Layer = &tmx_map.layers[0];
-
-            // Loop the row first and then the individual tiles on that row
-            // and then switch to the next row
-            // y = row number
-            // x = column number
-            for (y, row) in layer.tiles.iter().enumerate().clone() {
-                for (x, &tile) in row.iter().enumerate() {
-                    // Do nothing with empty tiles
-                    if tile == 0 {
-                        continue;
-                    }
-
-                    // Tile ids start from 1 but tileset sprites start from 0
-                    let tile = tile - 1;
-
-                    // Sprite for the tile
-                    let tile_sprite = SpriteRender {
-                        sprite_sheet: sprite_sheet_handle.clone(),
-                        sprite_number: tile as usize,
-                        //flip_horizontal: false,
-                        //flip_vertical: false
-                    };
-
-                    // Where we should draw the tile?
-                    let mut tile_transform = Transform::default();
-                    let x_coord = x * tile_width as usize;
-                    // Bottom Left is 0,0 so we flip it to Top Left with the
-                    // ScreenDimensions.height since tiled coordinates start from top
-                    let y_coord = (screen_height) - (y as f32 * tile_height as f32);
-
-                    *tile_transform.translation_mut() = Vector3::new(
-                        x_coord as f32,
-                        y_coord as f32,
-                        -1.0
-                    );
-
-                    // Create the tile entity
-                    world
-                        .create_entity()
-                            .with(GlobalTransform::default())
-                            .with(tile_transform)
-                            .with(tile_sprite)
-                        .build();
-                }
-
-            }
-
-        }
-    }   
-
+    }
 }
 
 fn main() -> amethyst::Result<()> {
@@ -194,22 +149,38 @@ fn main() -> amethyst::Result<()> {
     
     use amethyst::utils::application_root_dir;
 
-    let conf_dir = format!("{}/resources/display_config.ron", application_root_dir());
+    let conf_dir = format!(
+        "{}/resources/display_config.ron", 
+        application_root_dir()
+        );
+
     let config = DisplayConfig::load(&conf_dir);
 
     // Rendering code.
     let pipe = Pipeline::build()
     .with_stage(
         Stage::with_backbuffer()
-            .clear_target(BLACK, 1.0) // Чёрный фон.
-            .with_pass(DrawFlat2D::new()),
+            // Background.
+            .clear_target(BLACK, -1.0) 
+            .with_pass(DrawFlat2D::new()
+                .with_transparency(
+                ColorMask::all(),
+                ALPHA,
+                Some(DepthMode::LessEqualWrite))), // Tells the pipeline to respect sprite z-depth.
     );
 
     let game_data = GameDataBuilder::default()
     .with_bundle(
         TransformBundle::new())?
     .with_bundle(
-        RenderBundle::new(pipe, Some(config)).with_sprite_sheet_processor()
+        InputBundle::<String, String>::new()
+            .with_bindings_from_file("resources/input.ron")?,
+    )?
+    .with(MovementSystem, "movement", &[])
+    .with_bundle(
+        RenderBundle::new(pipe, Some(config))
+            .with_sprite_sheet_processor()
+            .with_sprite_visibility_sorting(&[]), // Let's us use the `Transparent` component.
     )?;
 
     let mut game = Application::build("./", TiledGame)?
